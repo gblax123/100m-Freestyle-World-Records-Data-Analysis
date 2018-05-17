@@ -1,0 +1,400 @@
+---
+title: "World Record Swimming Times: A Tutorial On Data Analysis"
+author: "Greg Brinker - 112424251"
+date: "5/17/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(magrittr)
+library(tidyverse)
+library(rvest)
+library(lubridate)
+library(broom)
+```
+
+
+#Introduction
+Hello! Welcome to a tutorial on Data Analysis, using the programming Language R. You're probably thinking, "How can data be exciting?"... well, I'll show you - data is beautiful, and after learning how simple it is to collect and visualize it, it can really be a lot of fun! If you haven't done anything with R or data in general before, not to worry. This tutorial assumes that you have no prior experience! For the purposes of this tutorial, I'm going to be using the Progression of World Records in 100m Freestyle in Swimming from 1905-2009. If you'd like to see the data, or learn more about swimming records over time, you can find it here: https://en.wikipedia.org/wiki/World_record_progression_100_metres_freestyle. This tutorial is going to be broken up into 4 sections:
+
+- Data Collection, Parsing, and Cleaning
+- Exploratory Data Analysis and Visualizations
+- Hypothesis Testing and Machine Learning
+- Conclusion
+
+Let's hop right in!
+
+
+#Data Collection, Parsing, and Cleaning
+
+Like I mentioned, the data I'm using for this tutorial can be found at this link: https://en.wikipedia.org/wiki/World_record_progression_100_metres_freestyle. 
+
+Taking a quick look at that Wikipedia page, it's easy to see there are 4 tables that have data. We are interested in the first, and third tables: the progression of records for Men's and Women's 100m Freestyle over time. The data we are intereseted in is the Time, Name, Nationality, and Date. The other columns are relevant, however for this tutorial we don't need them. There are a few steps that need to be taken to get this data into a form that we can use:
+
+<b>Step 1</b>: Indicate the URL the data is coming from, and storing that in a variable called "url".
+
+<b>Step 2</b>: Extract the data for Men's records. We use "read_html" and "html_nodes" to find the tables in the document. We access the first table using ".[[1]]". "html_table" then loads that table in, and we set the column names*. Then we use "as_data_frame" to convert the information loaded into something that we can manipulate and work with!
+
+<b>Step 3</b>: Do the same for the Women's records, except this time we use ".[[3]]" because it is the third table in the document.
+
+<b>Step 4</b>: Use a "mutation" to add a "gender" column onto each of the data frames, we're going to use this later on to see differences in Men's and Women's records
+
+<b>Step 5</b>: Finally, we use "rbind" to combine both the Men's and Women's dataframes into a single dataframe that we'll call "data"
+
+<i>*Note: there are 2 "placeholder" column names, those refer to the blank column and "ref" column in the data. These won't be used, and will be dropped later.</i>
+
+Code for above steps:
+```{r}
+
+#URL where data is held
+url <- "https://en.wikipedia.org/wiki/World_record_progression_100_metres_freestyle"
+
+#Extract Men's Data (first table)
+mensData <- url %>%
+  read_html() %>%
+  html_nodes("table") %>%
+  .[[1]] %>%
+  html_table() %>%
+  set_colnames(c("index", "time","placeholder1","swimmer","country","date","meet","location","placeholder2")) %>%
+  as_data_frame()
+
+#Extract Women's Data (third table)
+womensData <- url %>%
+  read_html() %>%
+  html_nodes("table") %>%
+  .[[3]] %>%
+  html_table() %>%
+  set_colnames(c("index", "time","placeholder1","swimmer","country","date","meet","location","placeholder2")) %>%
+  as_data_frame()
+
+
+#Add gender column to each data frame
+mensData <- mensData %>%
+  mutate(gender="Men's")
+womensData <- womensData %>%
+  mutate(gender="Women's")
+
+
+#Combine two data frames
+data <- rbind(mensData,womensData)
+
+data
+
+```
+
+
+If you've made it this far, you have taken the first big step of data analysis - getting the data! Now that we have this data, we want to get rid of what we don't need. We can use the code below to drop the index, placeholder1, placeholder2, meet, and location columns from our dataset. 
+
+Code to remove the data we don't need, along with a preview of the dataframe
+```{r}
+
+#Drop unnecessary columns
+drops <- c("index","placeholder1","placeholder2","meet","location")
+data <- data[ , !(names(data) %in% drops)]
+data
+
+```
+
+
+Yuck - notice anything wrong with this? The swimmer name is written twice, in two different ways. The date is also written twice, and in a very weird ways. It seems like whoever created this page didn't have us Data people in mind - those pesky Wikipedia Contributors! <b>Not to worry!</b> we clean the data so that we can go about manipulating and analyzing it.
+
+Here are the steps we take to "tidy" this data:
+
+<b>Step 1:</b> First, convert the time into seconds. Most of it is already like that, but for the ones that are over a minute, there needs to be a modification. We use "str_detect" to see if there is a ":" in the time. If there is, that means that we have to take the number after the colon and add 60 to it. We do this by using "gsub", and a regex match. If there is no ":", we just convert the time to a number using "as.numeric".
+
+<b>Step 2:</b> We need to now correct the dates. We use another regex to extract the last part of the date (the Day, Month, and Year). We then use as.Date to take in that remaining value as a real date, that we can sort with.
+
+<b>Step 3:</b> Finally, we use another regex to extract the correct name (First and Last)
+
+Code for above steps, along with a preview of the dataframe:
+
+```{r, warning=FALSE}
+
+#Convert time to seconds
+data <- data %>%
+  mutate(time = ifelse(str_detect(time,':'),
+                       as.numeric(gsub('1:','',time))+60,
+                       as.numeric(time)))
+
+#Convert date to proper format
+data <- data %>%
+  mutate(date = gsub('\\d*-\\d*-\\d*-0{4}','',date)) %>%
+  mutate(date = as.Date(date, "%d %b %Y"))
+
+#Convert name to proper format
+data <- data %>%
+  mutate(swimmer = gsub('[^,]*, [A-Z][^A-Z]*','',swimmer))
+
+data
+
+
+```
+
+
+#Exploratory Data Analysis and Visualization
+
+At this point, we have all of the data we need, and have it in a format that will make it easy to manipulate and visualize it. This is the fun part!
+
+We're ready to make our first plot. There are many different functions in the code you're about to see, so here is an explanation of each one:
+
+<b>ggplot()</b>: this is the function that tells R we are plotting something
+
+<b>mapping=aes(y=time, x=date))</b>: the x and y axis are assigned here, x being the date (year) and y being the time of the record
+
+<b>geom_point()</b>: this indicates that we are making a dot plot
+
+<b>ggtitle()</b>: this puts a title at the top of our plot 
+
+<b>theme(...)</b>: this centers the title on the plot
+
+<b>xlab(), ylab()</b>: Assigns labels to the x and y axis
+
+
+Here is the code, along with the plot that's generated:
+```{r}
+
+#Create a plot that shows record time over the years, grouped by gender
+data %>%
+  ggplot(mapping=aes(y=time, x=date)) +
+    geom_point() +
+    ggtitle("100m Freestyle World Records") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("Year") +
+    ylab("Time (Seconds)") 
+
+```
+
+You've made your first plot, congratulations! Notice that there are two separate trends going on - this is due to the gender gap between Men and Women. Remember earlier we added a column for gender to the dataframes? We added that so we could group the two. For this next graph, we are going to separate the two genders into groups. Most of this code is the same as the previous, here are the differences:
+
+<b>geom_line()</b>: Tells R to use make a line graph instead of a normal point plot. This will make it easier to see the progression over the years.
+
+<b>...group=gender,color=factor(gender)</b>: We add these two arguments to the aes() function. What this tells R is the data should be grouped by gender, and each gender should have its own color.
+
+<b>labs()</b>: We use this to indicate that the legend on the right should have be labeled "Gender".
+
+Here is the code for this graph, along with the graph itself:
+
+```{r}
+
+#Create a plot that shows record time over the years, grouped by gender
+data %>%
+  ggplot(mapping=aes(y=time, x=date, group=gender, color=factor(gender))) +
+    geom_line() +
+    ggtitle("100m Freestyle World Records - Men's vs Women's") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("Year") +
+    ylab("Time (Seconds)") +
+    labs(colour = "Gender") 
+
+```
+
+<i>Note: there's something odd going on with the Men's records; around 1956-1957, there seems to be a slight increase in the record time (there should only be decreases as times go on). I'm attributing that to an error in data entry for whoever created the page. It's critical to keep in mind that humans are not perfect, and sometimes the data you get isn't perfect either! We're just going to ignore it, as all of the other records seem to be ok</i>
+
+---------------------
+
+
+Something else cool we can do is splitting the data by gender, and then grouping by swimmer. This will allow us to visualize the different swimmers that made records over the years. Most of the code is the same as the previous plots, except for a few changes:
+
+<b>filter(gender=="Men's")</b>: This takes only the records for the Men's data frame. The same is done for the women's in the second block of code.
+
+<b>...group=swimmer, color=factor(swimmer)</b>: This time we are grouping by the swimmer, and coloring by swimmer as well
+
+Here's the code for the graphs, and the graphs themselves:
+
+```{r}
+
+#Create a plot that shows Men's record time over the years, grouped by swimmer
+data %>%
+  filter(gender=="Men's") %>%
+  ggplot(mapping=aes(y=time, x=date, group=swimmer, color=factor(swimmer))) +
+    geom_line() +
+    ggtitle("100m Freestyle World Records - Men's") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("Year") +
+    ylab("Time (Seconds)") +
+    labs(colour = "Swimmer")  
+
+#Create a plot that shows Women's record time over the years, grouped by swimmer
+data %>%
+  filter(gender=="Women's") %>%
+  ggplot(mapping=aes(y=time, x=date, group=swimmer, color=factor(swimmer))) +
+    geom_line() +
+    ggtitle("100m Freestyle World Records - Women's") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("Year") +
+    ylab("Time (Seconds)") +
+    labs(colour = "Swimmer")
+
+```
+
+These graphs are interesting, and there some cool inferences we can make from it. Each color represents a different swimmer, and we can see how swimmers beat their own records over a few years. In addition, the blank spaces indicate times where a record wasn't broken - for example, from about 1938-1956, the Women's record wasn't broken by anyone.
+
+
+---------------------
+
+
+
+Something else we can do is see the number of records were achieved by each swimmer. This goes along with the graph we just made, many times if a swimmer broke a record, they would go on to break their own record for the next few years. To do this, follow these steps:
+
+<b>Step 1 (data preparation)</b>: We use "filter" to get the Men's records. 
+
+<b>Step 2</b>: We then use "group_by" to collect records by each swimmer.
+
+<b>Step 3</b>: "Summarize(count=n())" gives us the number of records in each group, which is the number of records for each swimmer.
+
+<b>Step 4 (graphing)</b>: This time we use geom_bar, which will this time display a bar plot. 
+
+<b>Step 5</b>: The aes() is similar to the previous graphs, but the only change is "x=reorder(swimmer,-count),y=count". What this does is tell the graph that swimmer will be on the x axis, and the "count" (number of records) will be on the y axis. Reorder(swimmer,-count) means that the swimmers will be ordered by their number of records, in descending order.
+
+<b>Step 6</b>: "theme(axis.text.x = element_text(angle = 45, hjust = 1))" will make the labels on the x axis (swimmer's names) be displayed diagonally, otherwise they will overlap and it would be nearly impossible to make the names out.
+
+These same steps are then repeated for the women's records.
+
+Here's the code for the graphs, and the graphs themselves:
+```{r}
+
+
+#Extract just the Men's records, determine number of records for each swimmer
+mensRecordCounts <- data %>%
+  filter(gender=="Men's") %>%
+  group_by(swimmer) %>%
+  summarize(count = n())
+
+#Create a barplot that shows number of records for each swimmer, descending order (Men's)
+mensRecordCounts %>%
+  ggplot() +
+    ggtitle("Total Records by Swimmer (Men's)") +
+    geom_bar(aes(x=reorder(swimmer,-count),y=count),stat="identity") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("Swimmer") +
+    ylab("Records") 
+
+
+#Extract just the Women's records, determine number of records for each swimmer
+womensRecordCounts <- data %>%
+  filter(gender=="Women's") %>%
+  group_by(swimmer) %>%
+  summarize(count = n())
+
+#Create a barplot that shows number of records for each swimmer, descending order (Women's)
+womensRecordCounts %>%
+  arrange(desc(count)) %>%
+  ggplot() +
+    ggtitle("Total Records by Swimmer (Women's)") +
+    geom_bar(aes(x=reorder(swimmer,-count),y=count),stat="identity") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("Swimmer") +
+    ylab("Records") 
+
+
+```
+
+Notice that the two graphs have a very similar distribution, however the top women had about about twice as many records as the men had.
+
+---------------------
+
+One final thing we can do to visualize this data is see the distribution of records for each country. The code is nearly identical to the code above, however the data is grouped by country instead of swimmer:
+
+```{r}
+
+#Extract just the Men's records, determine number of records for each country
+mensCountryRecordCounts <- data %>%
+  filter(gender=="Men's") %>%
+  group_by(country) %>%
+  summarize(count = n())
+
+#Create a barplot that shows number of records for each country, descending order (Men's)
+mensCountryRecordCounts %>%
+  arrange(desc(count)) %>%
+  ggplot() +
+    ggtitle("Total Records by Country (Men's)") +
+    geom_bar(aes(x=reorder(country,-count),y=count),stat="identity") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("Country") +
+    ylab("Records") 
+
+
+#Extract just the Women's records, determine number of records for each country
+womensCountryRecordCounts <- data %>%
+  filter(gender=="Women's") %>%
+  group_by(country) %>%
+  summarize(count = n())
+
+#Create a barplot that shows number of records for each country, descending order (Women's)
+womensCountryRecordCounts %>%
+  arrange(desc(count)) %>%
+  ggplot() +
+    ggtitle("Total Records by Country (Women's)") +
+    geom_bar(aes(x=reorder(country,-count),y=count),stat="identity") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("Country") +
+    ylab("Records") 
+
+
+```
+
+The top three countries for Men's records is the United States, Australia, and France. The top three countries for Women's records is Australia, East Germany, and the United States. It seems that the United States and Australia are natural swimmers!
+
+
+#Hypothesis Testing and Machine Learning
+
+Now that we've explored and visualized the data a little bit, we can move on to a more complicated concept: linear regression. When we talk about linear regression, what we are trying to do is find a relationship between two variables. In this case, we are going to see if there is a correlation between year and world record time for the Men's 100m Freestyle. In this case, we say that we <i>regress</i> time on year. When we do this, we'll get two coefficients: One for the "Intercept", and one for the "Year". This means that assuming the initial year, the time is estimated to be that intercept. Then for each year increase, the time is expected to change by the "Year" coefficient. The equation for this is Y = B0 + B1(X), where B0 is the intercept, and B1 is the year coefficient, and X is the number of years. This is very similar to a simple graph in math, Y = mx+b (m = slope, b = intercept). 
+
+In order to get a better regression, we're going to make a modification to the data so that the year 1905 is represented as year "0", and every year after that represents the years since 1905. Below, we extract the date as a numeric value, and subtract 1905 to get the updated year for regression purposes. You can see a visulization of this new data frame in the graph:
+
+```{r}
+
+#Change the date column to years since 1905
+mensRecords <- data %>%
+  filter(gender=="Men's") %>%
+  mutate(year = as.numeric(format(date,"%Y"))-1905)
+
+#Plot newly upated records, with x axis representing years since 1905
+mensRecords %>% ggplot(mapping=aes(y=time, x=year)) +
+    geom_line() +
+    ggtitle("100m Freestyle World Records - Men's") +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    xlab("Years (Since 1905)") +
+    ylab("Time (Seconds)")
+
+```
+
+When it comes to regression, we start with a null hypothesis. The null hypothesis is what we are going to test against, and decide whether to accept or reject it. In our case, the null hypothesis is that year has NO relationship to the record time. We calculate a linear regression like this:
+
+<b>Step 1</b>: "lm(time~year,data=mensRecords)" tells R that we are regressing time on the year, using the mensRecords data from above
+
+<b>Step 2</b>: We use the "tidy()" function to get the coefficients from the calculation, as well as a p.value, which will help us determine whether or not the null hypothesis can be accepted or rejected.
+
+
+Code for the steps above:
+```{r}
+
+#Null = there is no relationship between year and men's swimming times
+
+#Peform a regression on time vs year
+regression_line <- lm(time~year, data=mensRecords)
+regression_line %>%
+  tidy()
+
+```
+
+We have 62.7 as our Intercept, and -0.16. What this means that at year 0 (1905), the expected time is 62.73s, and for each year, the time is expected to go down by .16s. In addition, we have a p.value associated with year of 1.28e-33. This is a very low p.value, which shows us that there is a strong correlation; and we can reject our null hypothesis! We can say with statistical confidence that there IS in fact a correlation between year and record time.
+
+#Conclusion
+
+Congratulations! If you are reading this, that means you've made it through the entire tutorial (or just scrolled down to the bottom, but hoping the former). Let's take a second and recap everything that you've learned today. You first learned how to retrieve data from a webpage, and parse that data into a data frame. Next, you learned how to drop unnecessary data. You also figured out how to clean, or "tidy" data into a format that you can actually use. After that, you saw some examples of how different graphs could be made to visualize the data. Finally, you got a brief look into regression, and how machine learning can be used to test a hypothesis! At first glance, data doesn't look all that fun. It's just a bunch of numbers after all, right? Once you learn the tools needed to manipulate and visualize data, it opens up a new door for a completely different perspective on data. I hope that you enjoyed this tutorial, and highly encourage you to use the building blocks learned here to go out and learn more.
+
+---------------------
+
+A few resources in case you'd like to learn more:
+
+-If you'd like to see what else ggplot is capable of, read more here: https://www.rstudio.com/wp-content/uploads/2015/03/ggplot2-cheatsheet.pdf
+
+-If you'd like to read more about things you can do with R, see the documentation: https://www.rdocumentation.org/
+
+-If you're looking for other datasets to practice with, try this website: https://www.kaggle.com/datasets 
